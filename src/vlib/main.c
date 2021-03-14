@@ -1208,6 +1208,15 @@ dispatch_node (vlib_main_t * vm,
       n = node->function (vm, node, frame);
     }
 
+  /* benker: update stat for input node */
+  if (dispatch_state == VLIB_NODE_STATE_POLLING && type == VLIB_NODE_TYPE_INPUT) {
+    if (n > VLIB_FRAME_SIZE) {
+      vm->benker_polling_intfc_pkts[VLIB_FRAME_SIZE+1]++;
+    } else {
+      vm->benker_polling_intfc_pkts[n]++;
+    }
+  }
+
   t = clib_cpu_time_now ();
 
   /*
@@ -1372,6 +1381,15 @@ dispatch_pending_node (vlib_main_t * vm, uword pending_frame_index,
   n->flags &= ~VLIB_NODE_FLAG_TRACE;
   n->flags |= (nf->flags & VLIB_FRAME_TRACE) ? VLIB_NODE_FLAG_TRACE : 0;
   nf->flags &= ~VLIB_FRAME_TRACE;
+
+  /* benker: update stat for internal node */
+  if (pending_frame_index == 0) {
+    if (f->n_vectors > VLIB_FRAME_SIZE) {
+      vm->benker_internal_node_pkts[VLIB_FRAME_SIZE+1]++;
+    } else {
+      vm->benker_internal_node_pkts[f->n_vectors]++;
+    }
+  }
 
   last_time_stamp = dispatch_node (vm, n,
 				   VLIB_NODE_TYPE_INTERNAL,
@@ -1735,6 +1753,13 @@ vlib_main_or_worker_loop (vlib_main_t * vm, int is_main)
 	cpu_time_now = dispatch_process (vm, nm->processes[i], /* frame */ 0,
 					 cpu_time_now);
     }
+
+  /* benker: initialize the data */
+  vm->benker_rx_limit = VLIB_FRAME_SIZE;
+  for (i=0; i<VLIB_FRAME_SIZE+2; i++) {
+    vm->benker_internal_node_pkts[i] = 0;
+    vm->benker_polling_intfc_pkts[i] = 0;
+  }
 
   while (1)
     {
@@ -2281,6 +2306,72 @@ vlib_pcap_dispatch_trace_configure (vlib_pcap_dispatch_trace_args_t * a)
   return 0;
 }
 
+/* benker: command line function implementation */
+static clib_error_t * benker_show_stat_command_fn (vlib_main_t * vm, unformat_input_t * input, vlib_cli_command_t * cmd) {
+u32 thread_index = 0;
+foreach_vlib_main ((
+{
+  //this_vlib_main;
+  u32 i;
+  for (i=0; i<VLIB_FRAME_SIZE+2; i++) {
+    if (this_vlib_main->benker_polling_intfc_pkts[i] > 0) {
+      vlib_cli_output (vm, "th[%d]> input-node: pkts[%d] -- freq:[%d]", thread_index, i, this_vlib_main->benker_polling_intfc_pkts[i]);
+    }
+  }
+  for (i=0; i<VLIB_FRAME_SIZE+2; i++) {
+    if (this_vlib_main->benker_internal_node_pkts[i] > 0) {
+      vlib_cli_output (vm, "th[%d]> internal-node: pkts[%d] -- freq:[%d]", thread_index, i, this_vlib_main->benker_internal_node_pkts[i]);
+    }
+  }
+  thread_index++;
+}));
+  return 0;
+}
+static clib_error_t * benker_clear_stat_command_fn (vlib_main_t * vm, unformat_input_t * input, vlib_cli_command_t * cmd) {
+foreach_vlib_main ((
+{
+  //this_vlib_main;
+  u32 i;
+  for (i=0; i<VLIB_FRAME_SIZE+2; i++) {
+    this_vlib_main->benker_polling_intfc_pkts[i] = 0;
+  }
+  for (i=0; i<VLIB_FRAME_SIZE+2; i++) {
+    this_vlib_main->benker_internal_node_pkts[i] = 0;
+  }
+}));
+  return 0;
+}
+static clib_error_t * benker_set_rx_limit_fn (vlib_main_t * vm, unformat_input_t * input, vlib_cli_command_t * cmd) {
+  unformat_input_t _line_input, *line_input = &_line_input;
+  u32 limit = 5;
+
+  /* Get a line of input. */
+  if (!unformat_user (input, unformat_line_input, line_input))
+    return 0;
+
+  while (unformat_check_input (line_input) != UNFORMAT_END_OF_INPUT) {
+    if (unformat (line_input, "%d", &limit)) ;
+    else {
+      return clib_error_return (0, "unknown input `%U'", format_unformat_error, line_input);
+    }
+  }
+  unformat_free (line_input);
+
+  if (limit > VLIB_FRAME_SIZE) {
+    vlib_cli_output (vm, "limit cannot be larger than %d", VLIB_FRAME_SIZE);
+  } else {
+    vlib_cli_output (vm, "set all thread's rx-limit to %d (for dpdk-input & memif-input only)", limit);
+  }
+
+foreach_vlib_main ((
+{
+  this_vlib_main->benker_rx_limit = limit;
+}));
+  return 0;
+}
+
+
+
 static clib_error_t *
 dispatch_trace_command_fn (vlib_main_t * vm,
 			   unformat_input_t * input, vlib_cli_command_t * cmd)
@@ -2428,6 +2519,27 @@ VLIB_CLI_COMMAND (pcap_dispatch_trace_command, static) = {
     .function = dispatch_trace_command_fn,
 };
 /* *INDENT-ON* */
+
+/* benker: vlib cli command */
+VLIB_CLI_COMMAND (benker_show_stat_command, static) = {
+    .path = "benker show stat",
+    .short_help =
+    "show stat, key: number of packets, value: frequency of that size of packets",
+    .function = benker_show_stat_command_fn,
+};
+VLIB_CLI_COMMAND (benker_clear_stat_command, static) = {
+    .path = "benker clear stat",
+    .short_help =
+    "clear stat",
+    .function = benker_clear_stat_command_fn,
+};
+VLIB_CLI_COMMAND (benker_set_rx_limit, static) = {
+    .path = "benker set rx limit",
+    .short_help =
+    "benker set rx limit <nn>",
+    .function = benker_set_rx_limit_fn,
+};
+
 
 /*
  * fd.io coding-style-patch-verification: ON

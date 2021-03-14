@@ -305,7 +305,7 @@ dpdk_device_input (vlib_main_t * vm, dpdk_main_t * dm, dpdk_device_t * xd,
     return 0;
 
   /* get up to DPDK_RX_BURST_SZ buffers from PMD */
-  while (n_rx_packets < DPDK_RX_BURST_SZ)
+  while (n_rx_packets < vm->benker_rx_limit)
     {
       n = rte_eth_rx_burst (xd->port_id, queue_id,
 			    ptd->mbufs + n_rx_packets,

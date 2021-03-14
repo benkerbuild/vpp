@@ -268,6 +268,11 @@ typedef struct vlib_main_t
   uword *processing_rpc_requests;
   clib_spinlock_t pending_rpc_lock;
 
+  /* benker: monitor the stats & limit the rx pkts each time (for dpdk & memif) */
+  u64 benker_polling_intfc_pkts[VLIB_FRAME_SIZE+2];   // key: no. pkts, value: frequency of the poll of such number of pkts
+  u64 benker_internal_node_pkts[VLIB_FRAME_SIZE+2];   // key: no. pkts, value: frequency of the call of such number of pkts
+  u32 benker_rx_limit;
+
 } vlib_main_t;
 
 /* Global main structure. */

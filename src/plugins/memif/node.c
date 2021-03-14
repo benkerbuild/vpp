@@ -218,7 +218,7 @@ memif_device_input_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
   n_slots = last_slot - cur_slot;
 
   /* construct copy and packet vector out of ring slots */
-  while (n_slots && n_rx_packets < MEMIF_RX_VECTOR_SZ)
+  while (n_slots && n_rx_packets < vm->benker_rx_limit)
     {
       u32 dst_off, src_off, n_bytes_left;
       u16 s0;
@@ -583,7 +583,7 @@ memif_device_input_zc_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
   /* process ring slots */
   vec_validate_aligned (ptd->buffers, MEMIF_RX_VECTOR_SZ,
 			CLIB_CACHE_LINE_BYTES);
-  while (n_slots && n_rx_packets < MEMIF_RX_VECTOR_SZ)
+  while (n_slots && n_rx_packets < vm->benker_rx_limit)
     {
       vlib_buffer_t *hb;
 
