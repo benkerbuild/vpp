@@ -38,6 +38,10 @@ typedef struct {
     vlib_main_t * vlib_main;
     vnet_main_t * vnet_main;
     ethernet_main_t * ethernet_main;
+
+    /* custom variables */
+    uword *output_infc_map;     // key is sw_if_index, value is <routine1_intfc>##<routine2_intfc> (32bit each)
+
 } benker_plugin_main_t;
 
 extern benker_plugin_main_t benker_plugin_main;

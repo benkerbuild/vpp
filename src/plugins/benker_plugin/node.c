@@ -78,6 +78,7 @@ static char * benker_plugin_error_strings[] =
 typedef enum 
 {
   BENKER_PLUGIN_NEXT_INTERFACE_OUTPUT,
+  BENKER_PLUGIN_NEXT_ERROR_DROP,
   BENKER_PLUGIN_N_NEXT,
 } benker_plugin_next_t;
 
@@ -94,6 +95,7 @@ VLIB_NODE_FN (benker_plugin_node) (vlib_main_t * vm,
 		  vlib_node_runtime_t * node,
 		  vlib_frame_t * frame)
 {
+  benker_plugin_main_t * bmp = &benker_plugin_main;
   u32 n_left_from, * from, * to_next;
   benker_plugin_next_t next_index;
   u32 pkts_swapped = 0;
@@ -109,7 +111,7 @@ VLIB_NODE_FN (benker_plugin_node) (vlib_main_t * vm,
       vlib_get_next_frame (vm, node, next_index,
 			   to_next, n_left_to_next);
 
-      while (n_left_from >= 4 && n_left_to_next >= 2)
+      while (n_left_from >= 4 && n_left_to_next >= 2 && false /* focus on 1 pkt handling first */)
 	{
           u32 next0 = BENKER_PLUGIN_NEXT_INTERFACE_OUTPUT;
           u32 next1 = BENKER_PLUGIN_NEXT_INTERFACE_OUTPUT;
@@ -251,6 +253,21 @@ VLIB_NODE_FN (benker_plugin_node) (vlib_main_t * vm,
 
           sw_if_index0 = vnet_buffer(b0)->sw_if_index[VLIB_RX];
 
+          /* get the mapping */
+          uword *p0 = hash_get (bmp->output_infc_map, sw_if_index0);
+          if (PREDICT_FALSE (p0 == NULL))
+            {
+              clib_warning("benker_plugin sw_inf_index: %d, value not found", sw_if_index0);
+              next0 = BENKER_PLUGIN_NEXT_ERROR_DROP;
+            }
+          else
+            {
+              u32 routine1_sw_if_index = p0[0] >> 32;
+              u32 routine2_sw_if_index = p0[0];
+              clib_warning("benker_plugin routine1: %d, routine2: %d", routine1_sw_if_index, routine2_sw_if_index);
+              sw_if_index0 = routine1_sw_if_index;
+            }
+
           /* Send pkt back out the RX interface */
           vnet_buffer(b0)->sw_if_index[VLIB_TX] = sw_if_index0;
 
@@ -299,6 +316,7 @@ VLIB_REGISTER_NODE (benker_plugin_node) =
   /* edit / add dispositions here */
   .next_nodes = {
         [BENKER_PLUGIN_NEXT_INTERFACE_OUTPUT] = "interface-output",
+        [BENKER_PLUGIN_NEXT_ERROR_DROP] = "error-drop",
   },
 };
 #endif /* CLIB_MARCH_VARIANT */

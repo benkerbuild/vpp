@@ -33,8 +33,7 @@
 benker_plugin_main_t benker_plugin_main;
 
 /* Action function shared between message handler and debug CLI */
-
-int benker_plugin_enable_disable (benker_plugin_main_t * bmp, u32 sw_if_index,
+int benker_plugin_enable_disable (benker_plugin_main_t * bmp, u32 sw_if_index, u32 routine1_if_index, u32 routine2_if_index,
                                    int enable_disable)
 {
   vnet_sw_interface_t * sw;
@@ -50,16 +49,29 @@ int benker_plugin_enable_disable (benker_plugin_main_t * bmp, u32 sw_if_index,
   if (sw->type != VNET_SW_INTERFACE_TYPE_HARDWARE)
     return VNET_API_ERROR_INVALID_SW_IF_INDEX;
 
-  benker_plugin_create_periodic_process (bmp);
+  /* Not used at this moment */
+  // benker_plugin_create_periodic_process (bmp);
 
   vnet_feature_enable_disable ("device-input", "benker_plugin",
                                sw_if_index, enable_disable, 0, 0);
 
+  // update the mapping
+  if (enable_disable)
+    {
+    u64 value;
+    value = (uword)routine1_if_index << 32;
+    value += routine2_if_index;
+    hash_set(bmp->output_infc_map, sw_if_index, value);
+    }
+  else
+    hash_unset(bmp->output_infc_map, sw_if_index);
+
   /* Send an event to enable/disable the periodic scanner process */
-  vlib_process_signal_event (bmp->vlib_main,
-                             bmp->periodic_node_index,
-                             BENKER_PLUGIN_EVENT_PERIODIC_ENABLE_DISABLE,
-                            (uword)enable_disable);
+  /* Not used at this moment */
+  // vlib_process_signal_event (bmp->vlib_main,
+  //                            bmp->periodic_node_index,
+  //                            BENKER_PLUGIN_EVENT_PERIODIC_ENABLE_DISABLE,
+  //                           (uword)enable_disable);
   return rv;
 }
 
@@ -72,23 +84,38 @@ benker_plugin_enable_disable_command_fn (vlib_main_t * vm,
   u32 sw_if_index = ~0;
   int enable_disable = 1;
 
+  u32 routine1_sw_if_index = ~0;
+  u32 routine2_sw_if_index = ~0;
+
   int rv;
 
   while (unformat_check_input (input) != UNFORMAT_END_OF_INPUT)
     {
-      if (unformat (input, "disable"))
-        enable_disable = 0;
-      else if (unformat (input, "%U", unformat_vnet_sw_interface,
+      if (unformat (input, "intfc %U", unformat_vnet_sw_interface,
                          bmp->vnet_main, &sw_if_index))
         ;
+      else if (unformat (input, "routine1-intfc %U", unformat_vnet_sw_interface,
+                         bmp->vnet_main, &routine1_sw_if_index))
+        ;
+      else if (unformat (input, "routine2-intfc %U", unformat_vnet_sw_interface,
+                         bmp->vnet_main, &routine2_sw_if_index))
+        ;
+      else if (unformat (input, "disable"))
+        enable_disable = 0;
       else
         break;
-  }
+    }
 
   if (sw_if_index == ~0)
     return clib_error_return (0, "Please specify an interface...");
+  
+  if (routine1_sw_if_index == ~0)
+    return clib_error_return (0, "Please specify an routine1 output interface...");
 
-  rv = benker_plugin_enable_disable (bmp, sw_if_index, enable_disable);
+  if (routine2_sw_if_index == ~0)
+    return clib_error_return (0, "Please specify an routine2 output interface...");
+
+  rv = benker_plugin_enable_disable (bmp, sw_if_index, routine1_sw_if_index, routine2_sw_if_index, enable_disable);
 
   switch(rv)
     {
@@ -116,7 +143,7 @@ VLIB_CLI_COMMAND (benker_plugin_enable_disable_command, static) =
 {
   .path = "benker_plugin enable-disable",
   .short_help =
-  "benker_plugin enable-disable <interface-name> [disable]",
+  "benker_plugin enable-disable intfc <intfc-name> routine1-intfc <intfc-name> routine2-intfc <intfc-name> [disable]",
   .function = benker_plugin_enable_disable_command_fn,
 };
 /* *INDENT-ON* */
@@ -130,6 +157,8 @@ static void vl_api_benker_plugin_enable_disable_t_handler
   int rv;
 
   rv = benker_plugin_enable_disable (bmp, ntohl(mp->sw_if_index),
+                                      ntohl(mp->routine1_sw_if_index),
+                                      ntohl(mp->routine2_sw_if_index),
                                       (int) (mp->enable_disable));
 
   REPLY_MACRO(VL_API_BENKER_PLUGIN_ENABLE_DISABLE_REPLY);
@@ -148,6 +177,10 @@ static clib_error_t * benker_plugin_init (vlib_main_t * vm)
 
   /* Add our API messages to the global name_crc hash table */
   bmp->msg_id_base = setup_message_id_table ();
+
+  /* initialize custom variables */
+  // initialize the map, making example from gtpu4 implementation (that did the init implicitly)
+  bmp->output_infc_map = hash_create (0, sizeof (uword));
 
   return error;
 }
