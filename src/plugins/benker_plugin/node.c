@@ -19,6 +19,7 @@
 #include <vnet/pg/pg.h>
 #include <vppinfra/error.h>
 #include <benker_plugin/benker_plugin.h>
+#include <vnet/classify/vnet_classify.h>
 
 typedef struct 
 {
@@ -264,7 +265,7 @@ VLIB_NODE_FN (benker_plugin_node) (vlib_main_t * vm,
             {
               u32 routine1_sw_if_index = p0[0] >> 32;
               u32 routine2_sw_if_index = p0[0];
-              clib_warning("benker_plugin routine1: %d, routine2: %d", routine1_sw_if_index, routine2_sw_if_index);
+              clib_warning ("benker_plugin routine1: %d, routine2: %d", routine1_sw_if_index, routine2_sw_if_index);
               sw_if_index0 = routine1_sw_if_index;
             }
 

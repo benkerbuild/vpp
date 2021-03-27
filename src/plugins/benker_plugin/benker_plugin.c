@@ -108,7 +108,7 @@ benker_plugin_enable_disable_command_fn (vlib_main_t * vm,
 
   if (sw_if_index == ~0)
     return clib_error_return (0, "Please specify an interface...");
-  
+
   if (routine1_sw_if_index == ~0)
     return clib_error_return (0, "Please specify an routine1 output interface...");
 
@@ -181,6 +181,10 @@ static clib_error_t * benker_plugin_init (vlib_main_t * vm)
   /* initialize custom variables */
   // initialize the map, making example from gtpu4 implementation (that did the init implicitly)
   bmp->output_infc_map = hash_create (0, sizeof (uword));
+  bmp->gtpu_main = vlib_get_plugin_symbol("gtpu_plugin.so", "gtpu_main");
+
+  if (bmp->gtpu_main == NULL)
+    error = clib_error_create ("benker_plugin cannot find symbol gtpu_main from gtpu_plugin.so, make sure gtpu_plugin.so is included");
 
   return error;
 }
