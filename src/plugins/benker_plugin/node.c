@@ -23,20 +23,12 @@
 
 typedef struct 
 {
+  u8 routine; // currently only got 3 routines, 1 or 2, and 0 for default
   u32 next_index;
-  u32 sw_if_index;
-  u8 new_src_mac[6];
-  u8 new_dst_mac[6];
+  u32 routine_tx_sw_if_index;
 } benker_plugin_trace_t;
 
 #ifndef CLIB_MARCH_VARIANT
-static u8 *
-my_format_mac_address (u8 * s, va_list * args)
-{
-  u8 *a = va_arg (*args, u8 *);
-  return format (s, "%02x:%02x:%02x:%02x:%02x:%02x",
-		 a[0], a[1], a[2], a[3], a[4], a[5]);
-}
 
 /* packet trace format function */
 static u8 * format_benker_plugin_trace (u8 * s, va_list * args)
@@ -45,11 +37,8 @@ static u8 * format_benker_plugin_trace (u8 * s, va_list * args)
   CLIB_UNUSED (vlib_node_t * node) = va_arg (*args, vlib_node_t *);
   benker_plugin_trace_t * t = va_arg (*args, benker_plugin_trace_t *);
   
-  s = format (s, "BENKER_PLUGIN: sw_if_index %d, next index %d\n",
-              t->sw_if_index, t->next_index);
-  s = format (s, "  new src %U -> new dst %U",
-              my_format_mac_address, t->new_src_mac, 
-              my_format_mac_address, t->new_dst_mac);
+  s = format (s, "BENKER_PLUGIN: routine %d, next index %d, routine_tx_sw_if_index: %d\n",
+              t->routine, t->next_index, t->routine_tx_sw_if_index);
   return s;
 }
 
@@ -58,7 +47,7 @@ vlib_node_registration_t benker_plugin_node;
 #endif /* CLIB_MARCH_VARIANT */
 
 #define foreach_benker_plugin_error \
-_(SWAPPED, "Mac swap packets processed")
+_(HANDLED, "Benker plugin handled packets")
 
 typedef enum {
 #define _(sym,str) BENKER_PLUGIN_ERROR_##sym,
@@ -83,14 +72,6 @@ typedef enum
   BENKER_PLUGIN_N_NEXT,
 } benker_plugin_next_t;
 
-#define foreach_mac_address_offset              \
-_(0)                                            \
-_(1)                                            \
-_(2)                                            \
-_(3)                                            \
-_(4)                                            \
-_(5)
-
 
 VLIB_NODE_FN (benker_plugin_node) (vlib_main_t * vm,
 		  vlib_node_runtime_t * node,
@@ -99,7 +80,7 @@ VLIB_NODE_FN (benker_plugin_node) (vlib_main_t * vm,
   benker_plugin_main_t * bmp = &benker_plugin_main;
   u32 n_left_from, * from, * to_next;
   benker_plugin_next_t next_index;
-  u32 pkts_swapped = 0;
+  u32 pkts_handled = 0;
 
   from = vlib_frame_vector_args (frame);
   n_left_from = frame->n_vectors;
@@ -117,8 +98,6 @@ VLIB_NODE_FN (benker_plugin_node) (vlib_main_t * vm,
           u32 next0 = BENKER_PLUGIN_NEXT_INTERFACE_OUTPUT;
           u32 next1 = BENKER_PLUGIN_NEXT_INTERFACE_OUTPUT;
           u32 sw_if_index0, sw_if_index1;
-          u8 tmp0[6], tmp1[6];
-          ethernet_header_t *en0, *en1;
           u32 bi0, bi1;
 	  vlib_buffer_t * b0, * b1;
           
@@ -149,30 +128,6 @@ VLIB_NODE_FN (benker_plugin_node) (vlib_main_t * vm,
 
           ASSERT (b0->current_data == 0);
           ASSERT (b1->current_data == 0);
-          
-          en0 = vlib_buffer_get_current (b0);
-          en1 = vlib_buffer_get_current (b1);
-
-          /* This is not the fastest way to swap src + dst mac addresses */
-#define _(a) tmp0[a] = en0->src_address[a];
-          foreach_mac_address_offset;
-#undef _
-#define _(a) en0->src_address[a] = en0->dst_address[a];
-          foreach_mac_address_offset;
-#undef _
-#define _(a) en0->dst_address[a] = tmp0[a];
-          foreach_mac_address_offset;
-#undef _
-
-#define _(a) tmp1[a] = en1->src_address[a];
-          foreach_mac_address_offset;
-#undef _
-#define _(a) en1->src_address[a] = en1->dst_address[a];
-          foreach_mac_address_offset;
-#undef _
-#define _(a) en1->dst_address[a] = tmp1[a];
-          foreach_mac_address_offset;
-#undef _
 
           sw_if_index0 = vnet_buffer(b0)->sw_if_index[VLIB_RX];
           sw_if_index1 = vnet_buffer(b1)->sw_if_index[VLIB_RX];
@@ -181,31 +136,17 @@ VLIB_NODE_FN (benker_plugin_node) (vlib_main_t * vm,
           vnet_buffer(b0)->sw_if_index[VLIB_TX] = sw_if_index0;
           vnet_buffer(b1)->sw_if_index[VLIB_TX] = sw_if_index1;
 
-          pkts_swapped += 2;
+          pkts_handled += 2;
 
           if (PREDICT_FALSE((node->flags & VLIB_NODE_FLAG_TRACE)))
             {
               if (b0->flags & VLIB_BUFFER_IS_TRACED) 
                 {
-                    benker_plugin_trace_t *t = 
-                      vlib_add_trace (vm, node, b0, sizeof (*t));
-                    t->sw_if_index = sw_if_index0;
-                    t->next_index = next0;
-                    clib_memcpy (t->new_src_mac, en0->src_address,
-                                 sizeof (t->new_src_mac));
-                    clib_memcpy (t->new_dst_mac, en0->dst_address,
-                                 sizeof (t->new_dst_mac));
+
                   }
                 if (b1->flags & VLIB_BUFFER_IS_TRACED) 
                   {
-                    benker_plugin_trace_t *t = 
-                      vlib_add_trace (vm, node, b1, sizeof (*t));
-                    t->sw_if_index = sw_if_index1;
-                    t->next_index = next1;
-                    clib_memcpy (t->new_src_mac, en1->src_address,
-                                 sizeof (t->new_src_mac));
-                    clib_memcpy (t->new_dst_mac, en1->dst_address,
-                                 sizeof (t->new_dst_mac));
+
                   }
               }
             
@@ -221,8 +162,6 @@ VLIB_NODE_FN (benker_plugin_node) (vlib_main_t * vm,
 	  vlib_buffer_t * b0;
           u32 next0 = BENKER_PLUGIN_NEXT_INTERFACE_OUTPUT;
           u32 sw_if_index0;
-          u8 tmp0[6];
-          ethernet_header_t *en0;
 
           /* speculatively enqueue b0 to the current next frame */
 	  bi0 = from[0];
@@ -239,23 +178,13 @@ VLIB_NODE_FN (benker_plugin_node) (vlib_main_t * vm,
            */
           ASSERT (b0->current_data == 0);
           
-          en0 = vlib_buffer_get_current (b0);
-
-          /* This is not the fastest way to swap src + dst mac addresses */
-#define _(a) tmp0[a] = en0->src_address[a];
-          foreach_mac_address_offset;
-#undef _
-#define _(a) en0->src_address[a] = en0->dst_address[a];
-          foreach_mac_address_offset;
-#undef _
-#define _(a) en0->dst_address[a] = tmp0[a];
-          foreach_mac_address_offset;
-#undef _
-
           sw_if_index0 = vnet_buffer(b0)->sw_if_index[VLIB_RX];
 
-          /* get the mapping */
+          u8 routine = 0;
           uword *p0 = hash_get (bmp->output_infc_map, sw_if_index0);
+          u32 routine1_sw_if_index;
+          u32 routine2_sw_if_index;
+          /* get the mapping */
           if (PREDICT_FALSE (p0 == NULL))
             {
               clib_warning("benker_plugin sw_inf_index: %d, value not found", sw_if_index0);
@@ -263,9 +192,9 @@ VLIB_NODE_FN (benker_plugin_node) (vlib_main_t * vm,
             }
           else
             {
-              u32 routine1_sw_if_index = p0[0] >> 32;
-              u32 routine2_sw_if_index = p0[0];
               clib_warning ("benker_plugin routine1: %d, routine2: %d", routine1_sw_if_index, routine2_sw_if_index);
+              routine1_sw_if_index = p0[0] >> 32;
+              routine2_sw_if_index = p0[0];
               sw_if_index0 = routine1_sw_if_index;
             }
 
@@ -276,15 +205,20 @@ VLIB_NODE_FN (benker_plugin_node) (vlib_main_t * vm,
                             && (b0->flags & VLIB_BUFFER_IS_TRACED))) {
             benker_plugin_trace_t *t = 
                vlib_add_trace (vm, node, b0, sizeof (*t));
-            t->sw_if_index = sw_if_index0;
             t->next_index = next0;
-            clib_memcpy (t->new_src_mac, en0->src_address,
-                         sizeof (t->new_src_mac));
-            clib_memcpy (t->new_dst_mac, en0->dst_address,
-                         sizeof (t->new_dst_mac));
+            t->routine = routine;
+            t->routine_tx_sw_if_index = ~0;
+            if (routine == 1) 
+              {
+                t->routine_tx_sw_if_index = routine1_sw_if_index;
+              }
+            else if (routine == 2)
+              {
+                t->routine_tx_sw_if_index = routine2_sw_if_index;
+              }
             }
             
-          pkts_swapped += 1;
+          pkts_handled += 1;
 
           /* verify speculative enqueue, maybe switch current next frame */
 	  vlib_validate_buffer_enqueue_x1 (vm, node, next_index,
@@ -296,7 +230,7 @@ VLIB_NODE_FN (benker_plugin_node) (vlib_main_t * vm,
     }
 
   vlib_node_increment_counter (vm, benker_plugin_node.index, 
-                               BENKER_PLUGIN_ERROR_SWAPPED, pkts_swapped);
+                               BENKER_PLUGIN_ERROR_HANDLED, pkts_handled);
   return frame->n_vectors;
 }
 
