@@ -48,7 +48,7 @@ vlib_node_registration_t benker_stats_node;
 
 #define foreach_benker_stats_error \
 _(HANDLED, "Benker stats handled packets") \
-_(NO_TUNNEL, "Benker stats no such tunnel")
+_(NO_TUNNEL, "Benker stats no such tunnel (dropped)")
 
 typedef enum 
 {
@@ -187,7 +187,7 @@ benker_stats_inline (vlib_main_t * vm,
 
       if (PREDICT_FALSE (tunnel0 == NULL))
         {
-          b[0]->error = BENKER_STATS_ERROR_NO_TUNNEL;
+          b[0]->error = node->errors[BENKER_STATS_ERROR_NO_TUNNEL];
           next[0] = BENKER_STATS_NEXT_DROP;
         }
       else
