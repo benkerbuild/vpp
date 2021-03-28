@@ -25,6 +25,8 @@
 #include <vppinfra/hash.h>
 #include <vppinfra/error.h>
 
+#include <plugins/gtpu/gtpu.h>
+
 typedef struct {
     /* API message ID base */
     u16 msg_id_base;
@@ -38,6 +40,10 @@ typedef struct {
     vlib_main_t * vlib_main;
     vnet_main_t * vnet_main;
     ethernet_main_t * ethernet_main;
+
+    /* custom variables */
+    gtpu_main_t *gtpu_main;
+
 } benker_stats_main_t;
 
 extern benker_stats_main_t benker_stats_main;

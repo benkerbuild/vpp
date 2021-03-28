@@ -25,7 +25,6 @@
 #include <vppinfra/hash.h>
 #include <vppinfra/error.h>
 
-#include <plugins/gtpu/gtpu.h>
 #include <vnet/classify/policer_classify.h>
 
 typedef struct {
@@ -44,7 +43,6 @@ typedef struct {
 
     /* custom variables */
     uword *output_infc_map;     // key is sw_if_index, value is <routine1_intfc>##<routine2_intfc> (32bit each)
-    gtpu_main_t *gtpu_main;     // gtpu main
     policer_classify_main_t *pcm;
 
 } benker_plugin_main_t;

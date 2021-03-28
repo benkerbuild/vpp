@@ -20,6 +20,8 @@
 #include <vppinfra/error.h>
 #include <benker_stats/benker_stats.h>
 
+#include <plugins/gtpu/gtpu.h>
+
 typedef struct
 {
   u32 sw_if_index;
@@ -45,7 +47,8 @@ vlib_node_registration_t benker_stats_node;
 #endif /* CLIB_MARCH_VARIANT */
 
 #define foreach_benker_stats_error \
-_(HANDLED, "Benker stats handled packets")
+_(HANDLED, "Benker stats handled packets") \
+_(NO_TUNNEL, "Benker stats no such tunnel")
 
 typedef enum 
 {
@@ -76,9 +79,13 @@ benker_stats_inline (vlib_main_t * vm,
      		 vlib_node_runtime_t * node, vlib_frame_t * frame,
 		 int is_ip4, int is_trace)
 {
+  benker_stats_main_t * bmp = &benker_stats_main;
+  vnet_interface_main_t * im = &bmp->gtpu_main->vnet_main->interface_main;
+  u32 thread_index = vlib_get_thread_index();
   u32 n_left_from, *from;
   vlib_buffer_t *bufs[VLIB_FRAME_SIZE], **b;
   u16 nexts[VLIB_FRAME_SIZE], *next;
+  gtpu4_tunnel_key_t gtpu_key;
   u32 pkts_handled = 0;
 
   from = vlib_frame_vector_args (frame);
@@ -148,9 +155,50 @@ benker_stats_inline (vlib_main_t * vm,
 
   while (n_left_from > 0)
     {
+      ip4_header_t *ip4_0;
+      gtpu_header_t *gtpu4_0;
+      gtpu_tunnel_t * gtpu_tunnel0;
+      uword *tunnel0;
+      u32 len0;
 
      /* $$$$ process 1 pkt right here */
       next[0] = BENKER_STATS_NEXT_INTERFACE_OUTPUT;
+
+      /*
+          main logic, pseudocode in python style
+
+          key = getGtpuKey(pkts) # src.addr + teid
+          tunnel = getGtpuTunnel(key)
+          if not tunnel:
+            drop(pkt)
+            return
+          validation(pkt) # may skip
+          updateTunnelStats(pkt)
+
+      */
+
+      // offset (l2) 14-bytes => ip-header
+      // offset (l3, udp) 20+8 = 28-bytes => gtpu-header
+      ip4_0 = (void *)((u8*)vlib_buffer_get_current(b[0]) + 14);
+      gtpu4_0 = (void *)((u8*)ip4_0 + 28);
+      gtpu_key.src = ip4_0->src_address.as_u32;
+      gtpu_key.teid = gtpu4_0->teid;
+      tunnel0 = hash_get (bmp->gtpu_main->gtpu4_tunnel_by_key, gtpu_key.as_u64);
+
+      if (PREDICT_FALSE (tunnel0 == NULL))
+        {
+          b[0]->error = BENKER_STATS_ERROR_NO_TUNNEL;
+          next[0] = BENKER_STATS_NEXT_DROP;
+        }
+      else
+        {
+          gtpu_tunnel0 = pool_elt_at_index (bmp->gtpu_main->tunnels, tunnel0[0]);
+          len0 = gtpu4_0->length - ((gtpu4_0->ver_flags & GTPU_E_BIT) * 4) + ((gtpu4_0->ver_flags & GTPU_S_BIT) * 4); // buggy if more than 1 extension header
+          vlib_increment_combined_counter 
+            (im->combined_sw_if_counters + VNET_INTERFACE_COUNTER_RX,
+             thread_index, gtpu_tunnel0->sw_if_index,
+             1, len0);
+        }
 
       if (is_trace)
 	{

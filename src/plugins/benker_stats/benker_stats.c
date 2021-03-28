@@ -35,6 +35,14 @@ static clib_error_t * benker_stats_init (vlib_main_t * vm)
   bmp->vlib_main = vm;
   bmp->vnet_main = vnet_get_main();
 
+  bmp->gtpu_main = vlib_get_plugin_symbol("gtpu_plugin.so", "gtpu_main");
+
+  if (bmp->gtpu_main == NULL)
+    {
+      error = clib_error_create ("benker_plugin cannot find symbol gtpu_main from gtpu_plugin.so, make sure gtpu_plugin.so is included");
+      return error;
+    }
+
   return error;
 }
 
