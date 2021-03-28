@@ -73,9 +73,9 @@ static char * benker_plugin_error_strings[] =
 
 typedef enum 
 {
-  BENKER_PLUGIN_NEXT_INTERFACE_OUTPUT,
   BENKER_PLUGIN_NEXT_ERROR_DROP,
-  BENKER_PLUGIN_NEXT_MYGTPU,
+  BENKER_PLUGIN_NEXT_INTERFACE_OUTPUT,
+  BENKER_PLUGIN_NEXT_BENKER_STATS,
   BENKER_PLUGIN_N_NEXT,
 } benker_plugin_next_t;
 
@@ -300,7 +300,7 @@ VLIB_NODE_FN (benker_plugin_node) (vlib_main_t * vm,
                     }
                   else
                     {
-                      // TODO: update tunnel stats (maybe another node for this?)
+                      next0 = BENKER_PLUGIN_NEXT_BENKER_STATS;
                     }
                 }
               else if (PREDICT_TRUE (t0->next_table_index != ~0))
@@ -364,9 +364,9 @@ VLIB_REGISTER_NODE (benker_plugin_node) =
 
   /* edit / add dispositions here */
   .next_nodes = {
-        [BENKER_PLUGIN_NEXT_INTERFACE_OUTPUT] = "interface-output",
         [BENKER_PLUGIN_NEXT_ERROR_DROP] = "error-drop",
-        [BENKER_PLUGIN_NEXT_MYGTPU] = "gtpu4-input",
+        [BENKER_PLUGIN_NEXT_INTERFACE_OUTPUT] = "interface-output",
+        [BENKER_PLUGIN_NEXT_BENKER_STATS] = "benker_stats",
   },
 };
 #endif /* CLIB_MARCH_VARIANT */

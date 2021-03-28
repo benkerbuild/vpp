@@ -214,7 +214,7 @@ VNET_FEATURE_INIT (benker_plugin, static) =
 VLIB_PLUGIN_REGISTER () =
 {
   .version = VPP_BUILD_VER,
-  .description = "benker_plugin plugin description goes here",
+  .description = "benker_plugin plugin for learning vpp",
 };
 /* *INDENT-ON* */
 
