@@ -19,7 +19,9 @@
 #include <vnet/pg/pg.h>
 #include <vppinfra/error.h>
 #include <benker_plugin/benker_plugin.h>
-#include <vnet/classify/vnet_classify.h>
+
+#include <vnet/policer/policer.h>
+#include <vnet/policer/police_inlines.h>
 
 typedef struct 
 {
@@ -47,7 +49,11 @@ vlib_node_registration_t benker_plugin_node;
 #endif /* CLIB_MARCH_VARIANT */
 
 #define foreach_benker_plugin_error \
-_(HANDLED, "Benker plugin handled packets")
+_(HANDLED, "Benker plugin handled packets") \
+_(ROUTINE0, "Benker plugin default-routine packets") \
+_(ROUTINE1, "Benker plugin routine-1 packets") \
+_(ROUTINE2, "Benker plugin routine-2 packets") \
+_(POLICER_DROP, "Benker plugin policer drop packets (routine-1)")
 
 typedef enum {
 #define _(sym,str) BENKER_PLUGIN_ERROR_##sym,
@@ -69,6 +75,7 @@ typedef enum
 {
   BENKER_PLUGIN_NEXT_INTERFACE_OUTPUT,
   BENKER_PLUGIN_NEXT_ERROR_DROP,
+  BENKER_PLUGIN_NEXT_MYGTPU,
   BENKER_PLUGIN_N_NEXT,
 } benker_plugin_next_t;
 
@@ -78,9 +85,60 @@ VLIB_NODE_FN (benker_plugin_node) (vlib_main_t * vm,
 		  vlib_frame_t * frame)
 {
   benker_plugin_main_t * bmp = &benker_plugin_main;
+  vnet_classify_main_t *vcm = bmp->pcm->vnet_classify_main;
+  f64 now = vlib_time_now (vm);
   u32 n_left_from, * from, * to_next;
   benker_plugin_next_t next_index;
   u32 pkts_handled = 0;
+  u32 pkts_routines[3] = {0, 0, 0};
+  uword *output_intfc_value = NULL;    // first 32-bit is output interface for routine0, 1 ;; second 32-bit for routine2
+  u32 last_pkt_sw_if_index = ~0;     // for reducing the hash-lookup if same sw interface
+  u64 time_in_policer_periods;
+
+  time_in_policer_periods =
+    clib_cpu_time_now () >> POLICER_TICKS_PER_PERIOD_SHIFT;
+
+  from = vlib_frame_vector_args (frame);
+  n_left_from = frame->n_vectors;
+  next_index = node->cached_next_index;
+
+  /* compute packet hash & assign hash table index to packets */
+  while (n_left_from > 0)
+    {
+      vlib_buffer_t *b0;
+      u32 bi0;
+      u8 *h0;
+      u32 sw_if_index0;
+      u32 table_index0;
+      vnet_classify_table_t *t0;
+
+      bi0 = from[0];
+      b0 = vlib_get_buffer (vm, bi0);
+      h0 = b0->data;
+
+      sw_if_index0 = vnet_buffer (b0)->sw_if_index[VLIB_RX];
+      // check if the classify table exist for that intfc
+      if (PREDICT_FALSE(vec_len(bmp->pcm->classify_table_index_by_sw_if_index[POLICER_CLASSIFY_TABLE_L2]) < sw_if_index0+1))
+        {
+          vnet_buffer (b0)->l2_classify.table_index = ~0;
+          from++;
+          n_left_from--;
+          continue;
+        }
+      else
+        table_index0 = 
+      bmp->pcm->classify_table_index_by_sw_if_index[POLICER_CLASSIFY_TABLE_L2][sw_if_index0];
+      
+      t0 = pool_elt_at_index (vcm->tables, table_index0);
+      vnet_buffer (b0)->l2_classify.hash = 
+    vnet_classify_hash_packet (t0, (u8 *) h0);
+
+      vnet_buffer (b0)->l2_classify.table_index = table_index0;
+      vnet_classify_prefetch_bucket (t0, vnet_buffer (b0)->l2_classify.hash);
+
+      from++;
+      n_left_from--;
+    }
 
   from = vlib_frame_vector_args (frame);
   n_left_from = frame->n_vectors;
@@ -161,7 +219,14 @@ VLIB_NODE_FN (benker_plugin_node) (vlib_main_t * vm,
           u32 bi0;
 	  vlib_buffer_t * b0;
           u32 next0 = BENKER_PLUGIN_NEXT_INTERFACE_OUTPUT;
-          u32 sw_if_index0;
+          u32 routines_sw_if_index0[3] = {~0, ~0, ~0};  // routine0 same as routine1
+          u8 routine0 = 0;  // which routine it goes for the packet
+          u32 table_index0;
+          vnet_classify_table_t *t0;
+          vnet_classify_entry_t *e0;
+          u64 hash0;
+          u8 *h0;
+          u8 act0;
 
           /* speculatively enqueue b0 to the current next frame */
 	  bi0 = from[0];
@@ -172,53 +237,96 @@ VLIB_NODE_FN (benker_plugin_node) (vlib_main_t * vm,
 	  n_left_to_next -= 1;
 
 	  b0 = vlib_get_buffer (vm, bi0);
+    h0 = b0->data;
+    table_index0 = vnet_buffer (b0)->l2_classify.table_index;
+    e0 = 0;
+    t0 = 0;
           /* 
            * Direct from the driver, we should be at offset 0
            * aka at &b0->data[0]
            */
           ASSERT (b0->current_data == 0);
           
-          sw_if_index0 = vnet_buffer(b0)->sw_if_index[VLIB_RX];
-
-          u8 routine = 0;
-          uword *p0 = hash_get (bmp->output_infc_map, sw_if_index0);
-          u32 routine1_sw_if_index;
-          u32 routine2_sw_if_index;
           /* get the mapping */
-          if (PREDICT_FALSE (p0 == NULL))
+          if (PREDICT_FALSE (last_pkt_sw_if_index != vnet_buffer(b0)->sw_if_index[VLIB_RX]))
             {
-              clib_warning("benker_plugin sw_inf_index: %d, value not found", sw_if_index0);
-              next0 = BENKER_PLUGIN_NEXT_ERROR_DROP;
-            }
-          else
-            {
-              clib_warning ("benker_plugin routine1: %d, routine2: %d", routine1_sw_if_index, routine2_sw_if_index);
-              routine1_sw_if_index = p0[0] >> 32;
-              routine2_sw_if_index = p0[0];
-              sw_if_index0 = routine1_sw_if_index;
+              last_pkt_sw_if_index = vnet_buffer(b0)->sw_if_index[VLIB_RX];
+              output_intfc_value = hash_get (bmp->output_infc_map, last_pkt_sw_if_index);
             }
 
-          /* Send pkt back out the RX interface */
-          vnet_buffer(b0)->sw_if_index[VLIB_TX] = sw_if_index0;
+          ASSERT (output_intfc_value != NULL);
+          
+          routines_sw_if_index0[0] = routines_sw_if_index0[1] = output_intfc_value[0] >> 32; // routine0, 1, first 32-bit
+          routines_sw_if_index0[2] = output_intfc_value[0];       // routine 2, second 32-bit
+
+          /*
+              main logic, pseudocode for the idea (in python sytle)
+
+              entry = get_entry(hash_table0, pkt)
+              if has_entry(entry): # routine-1
+                action = policer(entry)
+                if action == DROP:
+                  put_pkt_to_drop(pkt)
+                else:
+                  update_gtpu_stats(pkt)
+                  put_pkt_to_routine1_intfc(pkt)
+              else:
+                entry = get_entry(hash_table1, pkt)
+                if has_entry(entry):  # routine-2
+                  put_pkt_to_routine2_intfc(pkt)
+                else:
+                  put_pkt_to_routine1_intfc(pkt)  # default routine same output intfc as routine-1
+              
+          */
+          routine0 = 0;   // default routine
+          if (PREDICT_TRUE (table_index0 != ~0))
+            {
+              hash0 = vnet_buffer (b0)->l2_classify.hash;
+              t0 = pool_elt_at_index (vcm->tables, table_index0);
+              e0 = vnet_classify_find_entry (t0, (u8 *) h0, hash0, now);
+
+              if (e0)
+                {
+                  routine0 = 1;
+                  act0 = vnet_policer_police (vm,
+                                  b0,
+                                  e0->next_index,
+                                  time_in_policer_periods,
+                                  e0->opaque_index);
+                  if (PREDICT_FALSE (act0 == SSE2_QOS_ACTION_DROP))
+                    {
+                      next0 = BENKER_PLUGIN_NEXT_ERROR_DROP;
+                      b0->error = node->errors[BENKER_PLUGIN_ERROR_POLICER_DROP];
+                    }
+                  else
+                    {
+                      // TODO: update tunnel stats (maybe another node for this?)
+                    }
+                }
+              else if (PREDICT_TRUE (t0->next_table_index != ~0))
+                {
+                  t0 = pool_elt_at_index (vcm->tables, t0->next_table_index);
+                  e0 = vnet_classify_find_entry (t0, (u8 *) h0, hash0, now);
+                  if (e0)
+                    {
+                      routine0 = 2;
+                    }
+                }
+            }
+          vnet_buffer (b0)->sw_if_index[VLIB_TX] = routines_sw_if_index0[routine0];
+          
 
           if (PREDICT_FALSE((node->flags & VLIB_NODE_FLAG_TRACE) 
                             && (b0->flags & VLIB_BUFFER_IS_TRACED))) {
-            benker_plugin_trace_t *t = 
-               vlib_add_trace (vm, node, b0, sizeof (*t));
-            t->next_index = next0;
-            t->routine = routine;
-            t->routine_tx_sw_if_index = ~0;
-            if (routine == 1) 
-              {
-                t->routine_tx_sw_if_index = routine1_sw_if_index;
-              }
-            else if (routine == 2)
-              {
-                t->routine_tx_sw_if_index = routine2_sw_if_index;
-              }
+            benker_plugin_trace_t *t0 = 
+               vlib_add_trace (vm, node, b0, sizeof (*t0));
+            t0->next_index = next0;
+            t0->routine = routine0;
+            t0->routine_tx_sw_if_index = routines_sw_if_index0[routine0];
             }
             
           pkts_handled += 1;
+          pkts_routines[routine0] += 1;
 
           /* verify speculative enqueue, maybe switch current next frame */
 	  vlib_validate_buffer_enqueue_x1 (vm, node, next_index,
@@ -231,6 +339,12 @@ VLIB_NODE_FN (benker_plugin_node) (vlib_main_t * vm,
 
   vlib_node_increment_counter (vm, benker_plugin_node.index, 
                                BENKER_PLUGIN_ERROR_HANDLED, pkts_handled);
+  vlib_node_increment_counter (vm, benker_plugin_node.index, 
+                               BENKER_PLUGIN_ERROR_ROUTINE0, pkts_routines[0]);
+  vlib_node_increment_counter (vm, benker_plugin_node.index, 
+                               BENKER_PLUGIN_ERROR_ROUTINE1, pkts_routines[1]);
+  vlib_node_increment_counter (vm, benker_plugin_node.index, 
+                               BENKER_PLUGIN_ERROR_ROUTINE2, pkts_routines[2]);
   return frame->n_vectors;
 }
 
@@ -252,6 +366,7 @@ VLIB_REGISTER_NODE (benker_plugin_node) =
   .next_nodes = {
         [BENKER_PLUGIN_NEXT_INTERFACE_OUTPUT] = "interface-output",
         [BENKER_PLUGIN_NEXT_ERROR_DROP] = "error-drop",
+        [BENKER_PLUGIN_NEXT_MYGTPU] = "gtpu4-input",
   },
 };
 #endif /* CLIB_MARCH_VARIANT */

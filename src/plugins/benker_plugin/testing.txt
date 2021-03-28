@@ -1,0 +1,36 @@
+
+sudo ip netns add A
+sudo ip netns add B
+
+sudo ip link add name host1 type veth peer name vpp1
+sudo ip link add name host2 type veth peer name vpp2
+
+sudo ip link set host1 netns A
+sudo ip link set host2 netns B
+sudo ip netns exec A ip link set dev host1 up
+sudo ip netns exec B ip link set dev host2 up
+sudo ip netns exec A ip addr add 172.16.88.10/24 dev host1
+sudo ip netns exec A ip addr add 172.16.88.11/24 dev host1
+sudo ip netns exec B ip addr add 172.16.88.20/24 dev host2
+sudo ip netns exec B ip addr add 172.16.88.21/24 dev host2
+
+create host-interface name vpp1
+create host-interface name vpp2
+set int state host-vpp1 up
+set int state host-vpp2 up
+set int l2 br host-vpp1 1
+set int l2 br host-vpp2 1
+benker_plugin enable-disable intfc host-vpp1 routine1-intfc host-vpp2 routine2-intfc host-vpp2
+
+
+sudo ip netns exec A ping 172.16.88.20
+
+
+// throttle
+ref: https://blog.csdn.net/weixin_40815457/article/details/86524227
+
+configure policer name policy1 cir 800 cb 90000 rate kbps round closest type 1r2c conform-action transmit exceed-action drop
+classify table mask l3 ip4 dst
+classify session policer-hit-next policy1 exceed-color table-index 0 match l3 ip4 dst 172.16.88.20
+set policer classify interface host-vpp1 l2-table 0
+
